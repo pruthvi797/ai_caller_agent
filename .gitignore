@@ -5,7 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
-
+uploads/
+alembic.ini
 # Virtual environments
 .venv
 
