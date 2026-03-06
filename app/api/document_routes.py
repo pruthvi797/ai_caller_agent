@@ -11,9 +11,26 @@ from app.models.user import User
 from app.schemas.document_schema import (
     DocumentResponse, DocumentDetailResponse, ChunkResponse, ProcessingResult
 )
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.core.security import get_current_user
 from app.services.document_processor import process_document
+
+
+# ── Background task wrapper ────────────────────────────────────────────────────
+# IMPORTANT: FastAPI closes the request DB session before background tasks run.
+# We must create a fresh session inside the background task itself.
+def _run_process_document(document_id: str) -> None:
+    """
+    Wrapper that creates its own DB session for background processing.
+    Never pass the request-scoped `db` session to BackgroundTasks — it will
+    already be closed by the time the task runs.
+    """
+    db = SessionLocal()
+    try:
+        process_document(document_id, db)
+    finally:
+        db.close()
+
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -124,7 +141,7 @@ async def upload_document(
     db.commit()
     db.refresh(doc)
 
-    background_tasks.add_task(process_document, str(doc.document_id), db)
+    background_tasks.add_task(_run_process_document, str(doc.document_id))
     return doc
 
 
@@ -208,7 +225,7 @@ def reprocess_document(
     doc.updated_at = datetime.utcnow()      # type: ignore[assignment]
     db.commit()
 
-    background_tasks.add_task(process_document, str(doc.document_id), db)
+    background_tasks.add_task(_run_process_document, str(doc.document_id))
 
     return ProcessingResult(
         document_id=doc.document_id,  # type: ignore[arg-type]

@@ -495,35 +495,48 @@ def _extract_from_image_bytes(
 
         except Exception as e:
             err_str = str(e)
-            is_rate_limit = "429" in err_str or "rate_limit" in err_str.lower()
-            is_auth_error = (
+
+            # Auth errors — no point retrying
+            is_auth = (
                 "401" in err_str
                 or "authentication" in err_str.lower()
                 or "api_key" in err_str.lower()
                 or "Incorrect API key" in err_str
             )
-
-            if is_auth_error:
+            if is_auth:
                 logger.error(
-                    f"OpenAI authentication failed. "
-                    f"Check OPENAI_API_KEY in your .env file.\nError: {e}"
+                    f"OpenAI auth failed — check OPENAI_API_KEY in .env\nError: {e}"
                 )
-                return ""  # no point retrying auth errors
+                return ""
 
+            # Rate limit — read retry-after from error, wait exactly that long
+            is_rate_limit = "429" in err_str or "rate_limit" in err_str.lower()
             if is_rate_limit and attempt < max_retries:
-                wait = min(15 * attempt, 60)
+                # Try to extract the actual retry-after value from the error message
+                import re as _re
+                retry_match = _re.search(r"retry.{0,20}?(\d+)\s*s", err_str, _re.IGNORECASE)
+                wait = int(retry_match.group(1)) if retry_match else (10 * attempt)
+                wait = min(wait + 2, 65)  # +2s buffer, cap at 65s
                 logger.warning(
-                    f"Rate limit on {page_label} (attempt {attempt}/{max_retries}). "
-                    f"Waiting {wait}s..."
+                    f"Rate limit on {page_label} "
+                    f"(attempt {attempt}/{max_retries}). Waiting {wait}s..."
+                )
+                time.sleep(wait)
+                continue  # retry immediately after wait
+
+            # Other errors — log and retry with short backoff
+            if attempt < max_retries:
+                wait = 3 * attempt
+                logger.warning(
+                    f"OpenAI error on {page_label} "
+                    f"(attempt {attempt}/{max_retries}): {e}. Retrying in {wait}s..."
                 )
                 time.sleep(wait)
             else:
                 logger.warning(
-                    f"OpenAI failed on {page_label} "
-                    f"(attempt {attempt}/{max_retries}): {e}"
+                    f"OpenAI failed on {page_label} after {max_retries} attempts: {e}"
                 )
-                if attempt == max_retries:
-                    return ""
+                return ""
 
     return ""
 
