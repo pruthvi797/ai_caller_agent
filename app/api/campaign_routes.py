@@ -835,9 +835,21 @@ async def bulk_upload_leads(
     def _get(row: dict, key: str) -> Optional[str]:
         """Get value from row using normalised key."""
         original_key = normalised_fields.get(key)
-        if original_key:
-            return row.get(original_key, "").strip() or None
-        return None
+
+        if not original_key:
+            return None
+
+        value = row.get(original_key)
+
+        if value is None:
+            return None
+
+        value = str(value).strip()
+
+        if value == "":
+            return None
+
+        return value
 
     # Must have at minimum name + phone columns
     if "name" not in normalised_fields or "phone" not in normalised_fields:

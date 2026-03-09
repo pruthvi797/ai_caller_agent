@@ -21,6 +21,17 @@ MAX_IMAGE_SIZE_MB = 5
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def generate_sku(model: str, variant: str, year: int, transmission: str, tone: str | None = None):
+    model_code = model[:3].upper()
+    variant_code = variant.replace(" ", "").upper()
+    year_code = str(year)
+
+    sku = f"{model_code}-{variant_code}-{year_code}-{transmission.upper()}"
+
+    if tone:
+        sku += f"-{tone.upper()}"
+
+    return sku
 
 def _get_car_or_404(car_model_id: str, dealership_id, db: Session) -> CarModel:
     """Fetch a car that belongs to the current user's dealership, or raise 404."""
@@ -69,10 +80,20 @@ def create_car(
             detail=f"{body.brand} {body.model_name} {body.variant} ({body.model_year}) already exists in your inventory"
         )
 
+    data = body.model_dump(exclude_unset=False)
+
+    data["sku_code"] = generate_sku(
+        data["model_name"],
+        data["variant"],
+        data["model_year"],
+        data["transmission"],
+        data.get("tone")
+    )
+
     car = CarModel(
         car_model_id=uuid.uuid4(),
         dealership_id=current_user.dealership_id,
-        **body.model_dump(exclude_unset=False),
+        **data,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
@@ -155,6 +176,8 @@ def get_car(
 
 # ── UPDATE ────────────────────────────────────────────────────────────────────
 
+from sqlalchemy.exc import IntegrityError
+
 @router.put("/{car_model_id}", response_model=CarModelResponse)
 def update_car(
     car_model_id: str,
@@ -162,19 +185,51 @@ def update_car(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update any fields of a car model."""
     _require_dealership(current_user)
     car = _get_car_or_404(car_model_id, current_user.dealership_id, db)
 
     update_data = body.model_dump(exclude_unset=True)
+
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields provided to update")
 
+    # apply updates
     for field, value in update_data.items():
         setattr(car, field, value)
 
+    # regenerate SKU if important fields changed
+    if any(k in update_data for k in ["model_name", "variant", "model_year", "transmission", "tone"]):
+        car.sku_code = generate_sku(# type: ignore
+            car.model_name,# type: ignore
+            car.variant,# type: ignore
+            car.model_year,# type: ignore
+            car.transmission,# type: ignore
+            getattr(car, "tone", None)
+        )# type: ignore
+
+        # check duplicate
+        existing = db.query(CarModel).filter(
+            CarModel.sku_code == car.sku_code,
+            CarModel.car_model_id != car.car_model_id
+        ).first()
+
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail="Another car variant already uses this SKU"
+            )
+
     car.updated_at = datetime.utcnow()  # type: ignore
-    db.commit()
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="SKU already exists"
+        )
+
     db.refresh(car)
     return car
 

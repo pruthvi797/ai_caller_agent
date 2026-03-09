@@ -1,5 +1,7 @@
 import os
 import uuid
+import logging
+import traceback
 from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Query
@@ -15,6 +17,8 @@ from app.core.database import get_db, SessionLocal
 from app.core.security import get_current_user
 from app.services.document_processor import process_document
 
+logger = logging.getLogger(__name__)
+
 
 # ── Background task wrapper ────────────────────────────────────────────────────
 # IMPORTANT: FastAPI closes the request DB session before background tasks run.
@@ -25,11 +29,41 @@ def _run_process_document(document_id: str) -> None:
     Never pass the request-scoped `db` session to BackgroundTasks — it will
     already be closed by the time the task runs.
     """
+    logger.info(f"Background task started — document_id={document_id}")
     db = SessionLocal()
     try:
-        process_document(document_id, db)
+        result = process_document(document_id, db)
+        status = result.get("processing_status", "unknown")
+        if status == "completed":
+            logger.info(
+                f"✅ Document processed — id={document_id} | "
+                f"chunks={result.get('chunk_count')} | "
+                f"type={result.get('doc_type_detected')} | "
+                f"method={result.get('extraction_method')}"
+            )
+        else:
+            logger.error(
+                f"❌ Document processing FAILED — id={document_id} | "
+                f"reason: {result.get('message')}"
+            )
+    except Exception as e:
+        logger.error(
+            f"💥 Unhandled exception in background task for document_id={document_id}:\n"
+            + traceback.format_exc()
+        )
+        # Best-effort: mark document as failed in DB
+        try:
+            doc = db.query(Document).filter(Document.document_id == document_id).first()
+            if doc:
+                doc.processing_status = "failed"        # type: ignore[assignment]
+                doc.processing_error  = str(e)          # type: ignore[assignment]
+                doc.updated_at        = datetime.utcnow() # type: ignore[assignment]
+                db.commit()
+        except Exception:
+            logger.error("Also failed to update document status to 'failed' in DB")
     finally:
         db.close()
+        logger.info(f"Background task finished — document_id={document_id}")
 
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
