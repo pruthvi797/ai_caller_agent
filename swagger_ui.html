@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Caller Agent — API Tester</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Sora:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d12; --surface: #12151e; --surface2: #1a1e2e; --surface3: #222840;
+    --border: #2a2f45; --border2: #353b58;
+    --accent: #4f8ef7; --accent2: #7c5cfc;
+    --green: #22d3a0; --red: #f74f6a; --orange: #f7a84f; --yellow: #f7d84f;
+    --text: #e8ecf5; --text2: #8892b0; --text3: #4a5270;
+    --font-mono: 'JetBrains Mono', monospace; --font-sans: 'Sora', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; height: 56px; display: flex; align-items: center; gap: 14px; position: sticky; top: 0; z-index: 100; }
+  .topbar-logo { font-size: 15px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; white-space: nowrap; }
+  .topbar-sep { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
+  .base-url-label { font-size: 10px; color: var(--text3); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
+  .base-url-input { background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-family: var(--font-mono); font-size: 12px; padding: 6px 10px; border-radius: 6px; width: 230px; outline: none; }
+  .base-url-input:focus { border-color: var(--accent); }
+  .token-indicator { width: 8px; height: 8px; border-radius: 50%; background: var(--text3); flex-shrink: 0; transition: background 0.3s; }
+  .token-indicator.active { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .token-input { background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-family: var(--font-mono); font-size: 11px; padding: 6px 10px; border-radius: 6px; width: 200px; outline: none; }
+  .token-input:focus { border-color: var(--green); }
+  .progress-pill { font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); color: var(--text2); white-space: nowrap; margin-left: auto; }
+  .progress-pill span { color: var(--green); }
+
+  .layout { display: flex; flex: 1; height: calc(100vh - 56px); overflow: hidden; }
+
+  .sidebar { width: 236px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; padding: 10px 0; }
+  .sidebar::-webkit-scrollbar { width: 3px; } .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .module-header { padding: 8px 14px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text3); display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .module-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border2); margin-left: auto; flex-shrink: 0; }
+  .module-dot.done { background: var(--green); }
+  .ep-item { display: flex; align-items: center; gap: 7px; padding: 6px 14px 6px 22px; cursor: pointer; border-left: 2px solid transparent; transition: background 0.12s; }
+  .ep-item:hover { background: var(--surface2); }
+  .ep-item.active { background: var(--surface2); border-left-color: var(--accent); }
+  .ep-method { font-family: var(--font-mono); font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; min-width: 42px; text-align: center; flex-shrink: 0; }
+  .ep-path-sb { font-family: var(--font-mono); font-size: 10px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .ep-label-sb { font-size: 10px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .ep-check { margin-left: auto; font-size: 10px; flex-shrink: 0; opacity: 0; color: var(--green); }
+  .ep-item.done .ep-check { opacity: 1; }
+
+  .main { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .main::-webkit-scrollbar { width: 4px; } .main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .ep-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .ep-card-head { padding: 14px 18px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); background: var(--surface2); flex-wrap: wrap; gap: 8px; }
+  .method-badge { font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 6px; flex-shrink: 0; }
+  .path-display { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+  .path-param-hl { color: var(--orange); }
+  .ep-desc-txt { font-size: 11px; color: var(--text2); margin-left: auto; }
+  .ep-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .sec-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text3); margin-bottom: 5px; }
+
+  .params-grid { display: grid; grid-template-columns: 160px 1fr; gap: 7px; align-items: center; }
+  .param-key { font-family: var(--font-mono); font-size: 12px; color: var(--orange); font-weight: 600; }
+  .p-input { background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-family: var(--font-mono); font-size: 11px; padding: 7px 10px; border-radius: 6px; outline: none; width: 100%; }
+  .p-input:focus { border-color: var(--orange); }
+
+  .q-wrap { display: flex; flex-wrap: wrap; gap: 7px; }
+  .q-item { display: flex; align-items: center; gap: 5px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px; }
+  .q-key { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+  .q-val { font-family: var(--font-mono); font-size: 10px; background: transparent; border: none; color: var(--text); width: 110px; outline: none; }
+
+  .body-editor { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .body-toolbar { display: flex; align-items: center; padding: 7px 11px; border-bottom: 1px solid var(--border); gap: 8px; }
+  .body-type { font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
+  .fmt-btn { margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface2); color: var(--text2); cursor: pointer; font-family: var(--font-sans); }
+  .fmt-btn:hover { color: var(--text); }
+  .body-ta { width: 100%; min-height: 200px; background: transparent; border: none; color: #79c0ff; font-family: var(--font-mono); font-size: 12px; line-height: 1.7; padding: 12px; resize: vertical; outline: none; }
+
+  .form-table { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .form-row { display: grid; grid-template-columns: 160px 1fr; border-bottom: 1px solid var(--border); }
+  .form-row:last-child { border-bottom: none; }
+  .form-key { padding: 8px 11px; font-family: var(--font-mono); font-size: 10px; color: var(--accent2); font-weight: 600; background: var(--surface2); border-right: 1px solid var(--border); display: flex; align-items: center; }
+  .form-val { padding: 8px 11px; font-family: var(--font-mono); font-size: 11px; background: transparent; border: none; color: var(--text); outline: none; width: 100%; }
+  .form-val::placeholder { color: var(--text3); }
+
+  .exec-row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+  .exec-btn { padding: 9px 22px; border-radius: 8px; border: none; font-family: var(--font-sans); font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 7px; transition: all 0.18s; }
+  .exec-btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; }
+  .exec-btn.primary:hover { opacity: 0.88; transform: translateY(-1px); }
+  .exec-btn.secondary { background: var(--surface2); border: 1px solid var(--border); color: var(--text2); }
+  .exec-btn.secondary:hover { color: var(--text); }
+  .mark-btn { margin-left: auto; padding: 7px 15px; border-radius: 8px; border: 1px solid var(--green); background: transparent; color: var(--green); font-size: 11px; font-weight: 700; cursor: pointer; font-family: var(--font-sans); transition: all 0.18s; }
+  .mark-btn:hover { background: var(--green); color: var(--bg); }
+  .mark-btn.is-done { background: rgba(34,211,160,0.12); }
+
+  .spinner { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,0.25); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; display: none; }
+  .spinner.on { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .resp-panel { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .resp-toolbar { display: flex; align-items: center; gap: 9px; padding: 8px 13px; background: var(--surface2); border-bottom: 1px solid var(--border); }
+  .status-badge { font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 5px; }
+  .status-badge.idle { background: var(--surface3); color: var(--text3); border: 1px solid var(--border); }
+  .status-badge.ok { background: rgba(34,211,160,0.12); color: var(--green); border: 1px solid rgba(34,211,160,0.3); }
+  .status-badge.err { background: rgba(247,79,106,0.12); color: var(--red); border: 1px solid rgba(247,79,106,0.3); }
+  .resp-time { font-family: var(--font-mono); font-size: 10px; color: var(--text3); }
+  .copy-btn { margin-left: auto; font-size: 10px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; font-family: var(--font-sans); }
+  .resp-body { font-family: var(--font-mono); font-size: 11px; line-height: 1.7; padding: 13px; max-height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; background: var(--bg); color: var(--text3); }
+  .resp-body.ok { color: var(--green); }
+  .resp-body.err { color: var(--red); }
+  .resp-body::-webkit-scrollbar { width: 3px; } .resp-body::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .json-k { color: #79b8ff; } .json-s { color: #9ecbff; } .json-n { color: #f8e3a1; } .json-b { color: #c084fc; } .json-null { color: var(--text3); }
+
+  .tips { background: rgba(79,142,247,0.05); border: 1px solid rgba(79,142,247,0.18); border-radius: 8px; padding: 11px 13px; }
+  .tips ul { padding-left: 15px; }
+  .tips li { font-size: 11px; color: var(--text2); margin-bottom: 3px; line-height: 1.5; }
+  .tips li.w { color: var(--orange); font-weight: 600; }
+
+  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--text3); text-align: center; padding: 40px; }
+  .empty h2 { font-size: 18px; color: var(--text2); }
+  .empty p { font-size: 12px; line-height: 1.6; max-width: 340px; }
+
+  .saved-panel { background: var(--surface); border-left: 1px solid var(--border); width: 192px; flex-shrink: 0; padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .saved-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text3); }
+  .saved-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
+  .saved-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text3); margin-bottom: 3px; }
+  .saved-val { font-family: var(--font-mono); font-size: 9px; color: var(--accent); word-break: break-all; cursor: pointer; }
+  .saved-val:hover { color: var(--text); }
+  .saved-val.empty { color: var(--text3); font-style: italic; }
+  .clear-btn { font-size: 10px; color: var(--text3); background: none; border: none; cursor: pointer; font-family: var(--font-sans); padding: 0; margin-top: auto; transition: color 0.15s; }
+  .clear-btn:hover { color: var(--red); }
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo">⚡ AI Caller Agent Tester</div>
+  <div class="topbar-sep"></div>
+  <span class="base-url-label">Base URL</span>
+  <input class="base-url-input" id="baseUrl" value="http://127.0.0.1:8000">
+  <div class="topbar-sep"></div>
+  <div class="token-indicator" id="tokenDot"></div>
+  <span class="base-url-label">Bearer</span>
+  <input class="token-input" id="tokenInput" placeholder="Paste access_token after login..." oninput="onToken()">
+  <div class="progress-pill">Done: <span id="pCount">0</span> / <span id="pTotal">0</span></div>
+</div>
+
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main" id="main">
+    <div class="empty" id="emptyState">
+      <div style="font-size:44px">🚀</div>
+      <h2>Pick an endpoint to begin</h2>
+      <p>Start at <strong>POST /auth/register</strong> → login → paste token → work down each module.</p>
+    </div>
+  </main>
+  <aside class="saved-panel">
+    <div class="saved-title">📎 Saved IDs</div>
+    <div id="savedItems"></div>
+    <button class="clear-btn" onclick="clearAll()">✕ Clear all saved data</button>
+  </aside>
+</div>
+
+<script>
+// ─── ENDPOINT DEFINITIONS ────────────────────────────────────────────────────
+const EP = [
+  // ── AUTH ──────────────────────────────────────────────────────────────────
+  { id:'reg', mod:'Auth', icon:'🔐', method:'POST', path:'/auth/register', label:'Register',
+    desc:'Create user account — all fields required by validator',
+    btype:'json',
+    body:`{
+  "email": "ravi@suzuki-hyd.com",
+  "password": "Test@1234",
+  "first_name": "Ravi",
+  "last_name": "Kumar",
+  "phone": "+919876543210",
+  "employee_id": "EMP001",
+  "company_name": "Hyderabad Suzuki Pvt Ltd",
+  "designation": "Sales Manager",
+  "department": "Sales"
+}`,
+    tips:['password needs: 8+ chars, 1 uppercase, 1 digit, 1 special char (!@#$%^&*)',
+          'phone must be E.164 format: +91XXXXXXXXXX',
+          'employee_id must be unique — uppercased automatically',
+          'first_name / last_name: letters only, min 2 chars'],
+    save:{'user_id':'user_id'} },
+
+  { id:'login', mod:'Auth', icon:'🔐', method:'POST', path:'/auth/login', label:'Login',
+    desc:'Form-data login — auto-fills Bearer token on success',
+    btype:'form',
+    fields:[
+      {k:'username', ph:'ravi@suzuki-hyd.com'},
+      {k:'password', ph:'Test@1234'},
+    ],
+    tips:['⚠️ This endpoint uses form-data, NOT JSON — fill the fields above',
+          'On success: access_token is auto-pasted into Bearer field',
+          'Also copy refresh_token from response for later use'],
+    save:{'access_token':'access_token'},
+    autoToken: true },
+
+  { id:'me', mod:'Auth', icon:'🔐', method:'GET', path:'/auth/me', label:'Get /me',
+    desc:'Verify your token works',
+    btype:'none',
+    tips:['No body or params needed','401 = re-paste your Bearer token'] },
+
+  { id:'refresh', mod:'Auth', icon:'🔐', method:'POST', path:'/auth/refresh', label:'Refresh token',
+    desc:'Exchange refresh_token for new access_token',
+    btype:'json',
+    body:`{
+  "refresh_token": "<paste refresh_token from login response>"
+}` },
+
+  { id:'chpwd', mod:'Auth', icon:'🔐', method:'POST', path:'/auth/change-password', label:'Change password',
+    desc:'Change your account password',
+    btype:'json',
+    body:`{
+  "current_password": "Test@1234",
+  "new_password": "NewPass@5678",
+  "confirm_password": "NewPass@5678"
+}`,
+    tips:['new_password has same strength rules as registration',
+          'confirm_password must match new_password exactly'] },
+
+  { id:'upme', mod:'Auth', icon:'🔐', method:'PUT', path:'/auth/me', label:'Update profile',
+    desc:'Update your profile fields',
+    btype:'json',
+    body:`{
+  "first_name": "Ravi",
+  "last_name": "Kumar",
+  "phone": "+919876543210",
+  "designation": "Senior Sales Manager",
+  "department": "Sales & Marketing",
+  "bio": "10+ years managing Suzuki sales operations in Hyderabad"
+}`,
+    tips:['All fields optional — send only what you want to change'] },
+
+  // ── DEALERSHIP ────────────────────────────────────────────────────────────
+  { id:'ds_create', mod:'Dealership', icon:'🏢', method:'POST', path:'/dealership/create', label:'Create dealership',
+    desc:'Required before cars, documents, campaigns',
+    btype:'json',
+    body:`{
+  "name": "Hyderabad Suzuki",
+  "brand": "Suzuki",
+  "location": "Banjara Hills, Hyderabad",
+  "showroom_address": "Plot 45, Road No. 12, Banjara Hills, Hyderabad",
+  "city": "Hyderabad",
+  "state": "Telangana",
+  "country": "India",
+  "pincode": "500034",
+  "contact_phone": "+919000012345",
+  "alternate_phone": "+919000067890",
+  "contact_email": "info@hyd-suzuki.com",
+  "website_url": "https://hyd-suzuki.com",
+  "gst_number": "36AABCU9603R1ZX",
+  "registration_number": "REG2010HYD001",
+  "description": "Authorised Suzuki dealership serving Hyderabad since 2010",
+  "established_year": "2010",
+  "total_employees": "85",
+  "monthly_target_calls": "500",
+  "latitude": 17.4126,
+  "longitude": 78.4071
+}`,
+    tips:['gst_number: exactly 15 alphanumeric chars (validated)',
+          'contact_phone must be E.164: +91XXXXXXXXXX',
+          'showroom_address needs at least 10 characters',
+          'established_year: 4-digit string e.g. "2010"',
+          'GST number must be unique across all dealerships'],
+    save:{'dealership_id':'dealership_id'} },
+
+  { id:'ds_me', mod:'Dealership', icon:'🏢', method:'GET', path:'/dealership/me', label:'Get my dealership',
+    desc:'Fetch your active dealership', btype:'none' },
+
+  { id:'ds_update', mod:'Dealership', icon:'🏢', method:'PUT', path:'/dealership/me', label:'Update dealership',
+    desc:'Edit any dealership fields', btype:'json',
+    body:`{
+  "name": "Hyderabad Suzuki Pvt Ltd",
+  "brand": "Suzuki",
+  "location": "Banjara Hills, Hyderabad",
+  "showroom_address": "Plot 45, Road No. 12, Banjara Hills, Hyderabad",
+  "city": "Hyderabad",
+  "state": "Telangana",
+  "country": "India",
+  "pincode": "500034",
+  "registration_number": "REG2010HYD001",
+  "gst_number": "36AABCU9603R1ZX",
+  "contact_phone": "+919000012345",
+  "alternate_phone": "+919000099999",
+  "contact_email": "info@hyd-suzuki.com",
+  "website_url": "https://www.hyd-suzuki.com",
+  "description": "Hyderabad's largest authorised Suzuki dealer since 2010",
+  "established_year": "2010",
+  "total_employees": "95",
+  "monthly_target_calls": "600",
+  "latitude": 17.4126,
+  "longitude": 78.4071
+}`,
+    tips:['All fields optional — send only changed fields'] },
+
+  { id:'ds_history', mod:'Dealership', icon:'🏢', method:'GET', path:'/dealership/history', label:'Dealership history',
+    desc:'All past dealerships for your account', btype:'none' },
+
+  // ── CARS ──────────────────────────────────────────────────────────────────
+  { id:'car1', mod:'Car Models', icon:'🚗', method:'POST', path:'/cars/', label:'Create car — Brezza ZXI+',
+    desc:'Add Brezza SUV to inventory',
+    btype:'json',
+    body:`{
+  "brand": "Suzuki",
+  "model_name": "Brezza",
+  "variant": "ZXI+",
+  "model_year": 2024,
+  "category": "SUV",
+  "fuel_type": "Petrol",
+  "transmission": "Automatic",
+  "price_ex_showroom": 1289000,
+  "drive_type": "FWD",
+  "seating_capacity": 5,
+  "available_colors": "Splendid Silver, Brave Khaki, Opulent Red, Pearl Arctic White, Midnight Black",
+  "sku_code": "BRZ-ZXI-2024-AT",
+  "price_on_road": 1489000,
+  "price_min": 899000,
+  "price_max": 1289000,
+  "emi_starting_from": 19500,
+  "engine_cc": 1462,
+  "engine_description": "1.5L K15C Smart Hybrid Petrol",
+  "max_power_bhp": 103.0,
+  "max_torque_nm": 137.0,
+  "mileage_kmpl": 19.8,
+  "top_speed_kmph": 170,
+  "boot_space_litres": 328,
+  "ground_clearance_mm": 198,
+  "kerb_weight_kg": 1145,
+  "length_mm": 3995,
+  "width_mm": 1790,
+  "height_mm": 1685,
+  "wheelbase_mm": 2500,
+  "fuel_tank_capacity_litres": 48.0,
+  "ncap_rating": "5-Star",
+  "airbags_count": 6,
+  "has_abs": true,
+  "has_esp": true,
+  "key_features": "Panoramic sunroof, 360-degree camera, 9-inch SmartPlay Pro+ touchscreen, HUD, wireless charger, cruise control",
+  "description": "The all-new Suzuki Brezza with K15C Smart Hybrid engine delivers best-in-class mileage with punchy performance and SUV-grade features.",
+  "highlights": "Sunroof,360-cam,HUD,Wireless Charging,6 Airbags",
+  "current_offer": "₹50,000 exchange bonus + ₹10,000 loyalty discount this month",
+  "offer_valid_until": "2024-03-31T23:59:59",
+  "exchange_bonus": 50000,
+  "corporate_discount": 15000,
+  "stock_count": 8,
+  "availability_status": "available",
+  "delivery_weeks": 1,
+  "is_featured": true
+}`,
+    tips:['category: Hatchback | Sedan | SUV | MUV | Crossover | Coupe | Convertible | Pickup',
+          'fuel_type: Petrol | Diesel | CNG | Electric | Hybrid | Petrol+CNG',
+          'transmission: Manual | Automatic | AMT | CVT | DCT',
+          'drive_type: FWD | RWD | AWD | 4WD',
+          'availability_status: available | out_of_stock | coming_soon | on_order | discontinued',
+          'price_ex_showroom is required and must be > 0',
+          'sku_code must be unique if provided'],
+    save:{'car_model_id':'car_model_id'} },
+
+  { id:'car2', mod:'Car Models', icon:'🚗', method:'POST', path:'/cars/', label:'Create car — Alto K10 VXI',
+    desc:'Add budget hatchback',
+    btype:'json',
+    body:`{
+  "brand": "Suzuki",
+  "model_name": "Alto K10",
+  "variant": "VXI",
+  "model_year": 2024,
+  "category": "Hatchback",
+  "fuel_type": "Petrol",
+  "transmission": "Manual",
+  "price_ex_showroom": 499000,
+  "seating_capacity": 5,
+  "available_colors": "Silky Silver, Sizzling Orange, Speedy Blue, Pearl Arctic White",
+  "price_on_road": 599000,
+  "price_min": 399000,
+  "price_max": 549000,
+  "emi_starting_from": 7500,
+  "engine_cc": 998,
+  "engine_description": "1.0L K10C Petrol",
+  "max_power_bhp": 66.0,
+  "max_torque_nm": 89.0,
+  "mileage_kmpl": 24.9,
+  "boot_space_litres": 214,
+  "ground_clearance_mm": 160,
+  "kerb_weight_kg": 748,
+  "fuel_tank_capacity_litres": 27.0,
+  "airbags_count": 2,
+  "has_abs": true,
+  "key_features": "SmartPlay Studio touchscreen, rear parking sensors, auto AC",
+  "description": "The all-new Alto K10 — India's most fuel-efficient entry-level hatchback.",
+  "highlights": "24.9 kmpl,Touchscreen,Auto AC,ABS",
+  "stock_count": 15,
+  "availability_status": "available",
+  "delivery_weeks": 0,
+  "is_featured": false
+}`,
+    save:{'car_model_id':'car_model_id_2'} },
+
+  { id:'car_list', mod:'Car Models', icon:'🚗', method:'GET', path:'/cars/', label:'List cars',
+    desc:'Filter & paginate inventory', btype:'none',
+    qp:[{k:'is_active',v:'true'},{k:'is_featured',v:''},{k:'category',v:''},{k:'fuel_type',v:''},{k:'search',v:''},{k:'limit',v:'20'},{k:'skip',v:'0'}],
+    tips:['Try: category=SUV, fuel_type=Petrol, transmission=Automatic',
+          'Try: min_price=500000 & max_price=1500000',
+          'Try: search=brezza (searches brand/model_name/variant)'] },
+
+  { id:'car_get', mod:'Car Models', icon:'🚗', method:'GET', path:'/cars/{car_model_id}', label:'Get car by ID',
+    desc:'Full car details', btype:'none',
+    pp:[{k:'car_model_id', sk:'car_model_id'}] },
+
+  { id:'car_upd', mod:'Car Models', icon:'🚗', method:'PUT', path:'/cars/{car_model_id}', label:'Update car',
+    desc:'Update any car fields', btype:'json',
+    pp:[{k:'car_model_id', sk:'car_model_id'}],
+    body:`{
+  "brand": "Suzuki",
+  "model_name": "Brezza",
+  "variant": "ZXI+ Dual Tone",
+  "model_year": 2024,
+  "category": "SUV",
+  "fuel_type": "Petrol",
+  "transmission": "Automatic",
+  "drive_type": "FWD",
+  "seating_capacity": 5,
+  "available_colors": "Splendid Silver, Brave Khaki, Opulent Red, Arctic White, Midnight Black, Earthen Brown",
+  "sku_code": "BRZ-ZXI-2024-AT-DT",
+  "price_ex_showroom": 1349000,
+  "price_on_road": 1549000,
+  "price_min": 899000,
+  "price_max": 1349000,
+  "emi_starting_from": 20500,
+  "engine_cc": 1462,
+  "engine_description": "1.5L K15C Smart Hybrid Petrol",
+  "max_power_bhp": 103.0,
+  "max_torque_nm": 137.0,
+  "mileage_kmpl": 19.8,
+  "top_speed_kmph": 170,
+  "boot_space_litres": 328,
+  "ground_clearance_mm": 198,
+  "kerb_weight_kg": 1145,
+  "fuel_tank_capacity_litres": 48.0,
+  "ncap_rating": "5-Star",
+  "airbags_count": 6,
+  "has_abs": true,
+  "has_esp": true,
+  "key_features": "Panoramic sunroof, 360-cam, HUD, wireless charger, ventilated seats, cruise control",
+  "description": "Updated Brezza ZXI+ Dual Tone with ventilated front seats and 6 new colours.",
+  "highlights": "Sunroof,360-cam,HUD,Ventilated Seats,6 Airbags,Dual Tone",
+  "current_offer": "₹60,000 exchange bonus — extended till April",
+  "offer_valid_until": "2024-04-30T23:59:59",
+  "exchange_bonus": 60000,
+  "corporate_discount": 20000,
+  "stock_count": 6,
+  "availability_status": "available",
+  "delivery_weeks": 1,
+  "is_featured": true,
+  "is_active": true
+}`,
+    tips:['Send only the fields you want to change','All fields are optional in PUT'] },
+
+  { id:'car_stock', mod:'Car Models', icon:'🚗', method:'PATCH', path:'/cars/{car_model_id}/stock', label:'Update stock',
+    desc:'Dedicated stock/availability endpoint', btype:'json',
+    pp:[{k:'car_model_id', sk:'car_model_id'}],
+    body:`{
+  "stock_count": 5,
+  "availability_status": "available",
+  "delivery_weeks": 2
+}`,
+    tips:['If stock_count=0 and no availability_status → auto sets to out_of_stock',
+          'availability_status: available | out_of_stock | coming_soon | on_order | discontinued'] },
+
+  { id:'car_feat', mod:'Car Models', icon:'🚗', method:'PATCH', path:'/cars/{car_model_id}/feature', label:'Toggle featured',
+    desc:'No body — toggles is_featured', btype:'none',
+    pp:[{k:'car_model_id', sk:'car_model_id'}],
+    tips:['No request body needed','Call again to toggle back'] },
+
+  { id:'car_tog', mod:'Car Models', icon:'🚗', method:'PATCH', path:'/cars/{car_model_id}/toggle-active', label:'Toggle active',
+    desc:'No body — toggles is_active', btype:'none',
+    pp:[{k:'car_model_id', sk:'car_model_id'}],
+    tips:['Inactive cars hidden from list by default (is_active=true filter)'] },
+
+  { id:'car_stats', mod:'Car Models', icon:'🚗', method:'GET', path:'/cars/stats/summary', label:'Inventory stats',
+    desc:'Totals by category and fuel type', btype:'none',
+    tips:['⚠️ In Swagger UI: test this BEFORE /cars/{car_model_id} — path order matters','No params needed'] },
+
+  { id:'car_del', mod:'Car Models', icon:'🚗', method:'DELETE', path:'/cars/{car_model_id}', label:'Soft-delete car',
+    desc:'Use Alto K10 ID for this', btype:'none',
+    pp:[{k:'car_model_id', sk:'car_model_id_2'}],
+    tips:['Soft-delete: sets deleted_at and is_active=false','Data preserved for call logs and history'] },
+
+  // ── DOCUMENTS ─────────────────────────────────────────────────────────────
+  { id:'doc_up', mod:'Documents', icon:'📄', method:'POST', path:'/documents/upload', label:'Upload document',
+    desc:'File upload — use Swagger UI at /docs', btype:'fileupload',
+    tips:['⚠️ File uploads cannot be done from this HTML tester (browser security)',
+          'Use Swagger UI at http://127.0.0.1:8000/docs instead',
+          'document_type: brochure | pricing_sheet | feature_comparison | promotional_offer | spec_sheet | other',
+          'Accepted: PDF, DOCX, JPG, PNG, WEBP — max 20MB',
+          'car_model_id links the doc to a specific car model',
+          'Processing runs async — status starts as pending'] },
+
+  { id:'doc_list', mod:'Documents', icon:'📄', method:'GET', path:'/documents/', label:'List documents',
+    desc:'Filter by type and status', btype:'none',
+    qp:[{k:'document_type',v:''},{k:'processing_status',v:''},{k:'car_model_id',v:''},{k:'limit',v:'20'}],
+    tips:['processing_status: pending | processing | completed | failed'] },
+
+  { id:'doc_get', mod:'Documents', icon:'📄', method:'GET', path:'/documents/{document_id}', label:'Get document',
+    desc:'Details + extracted text', btype:'none',
+    pp:[{k:'document_id', sk:'document_id'}],
+    save:{'document_id':'document_id'} },
+
+  { id:'doc_chunks', mod:'Documents', icon:'📄', method:'GET', path:'/documents/{document_id}/chunks', label:'Get chunks',
+    desc:'Extracted AI-ready text chunks', btype:'none',
+    pp:[{k:'document_id', sk:'document_id'}],
+    qp:[{k:'section_type',v:''}],
+    tips:['Only works when processing_status=completed',
+          'section_type: overview | pricing | features | safety | specifications | offers | general'] },
+
+  { id:'doc_repr', mod:'Documents', icon:'📄', method:'POST', path:'/documents/{document_id}/reprocess', label:'Reprocess',
+    desc:'Re-trigger if processing failed', btype:'none',
+    pp:[{k:'document_id', sk:'document_id'}],
+    tips:['No body needed','Resets to pending and re-runs extraction pipeline'] },
+
+  { id:'doc_del', mod:'Documents', icon:'📄', method:'DELETE', path:'/documents/{document_id}', label:'Delete document',
+    desc:'Soft-delete a document', btype:'none',
+    pp:[{k:'document_id', sk:'document_id'}] },
+
+  // ── KNOWLEDGE BASE ────────────────────────────────────────────────────────
+  { id:'kb_create', mod:'Knowledge Base', icon:'🧠', method:'POST', path:'/kb/', label:'Create KB',
+    desc:'Create empty knowledge base — status starts as draft',
+    btype:'json',
+    body:`{
+  "name": "Brezza March 2024 Campaign KB",
+  "description": "Compiled from Brezza brochure, pricing sheet and March promotional offers"
+}`,
+    tips:['name and description are the only fields here',
+          'Compile it in the next step to fill it with content'],
+    save:{'kb_id':'kb_id'} },
+
+  { id:'kb_compile', mod:'Knowledge Base', icon:'🧠', method:'POST', path:'/kb/{kb_id}/compile', label:'Compile KB',
+    desc:'Pull all doc chunks into KB',
+    btype:'json', pp:[{k:'kb_id', sk:'kb_id'}],
+    body:`{
+  "document_ids": [],
+  "car_model_ids": [],
+  "include_section_types": []
+}`,
+    tips:['Send empty arrays {} or [] to compile ALL completed docs for the dealership',
+          'Or filter by: "document_ids": ["<uuid>","<uuid>"]',
+          'Or filter by: "car_model_ids": ["<uuid>"] to compile only Brezza docs',
+          'Documents must have processing_status=completed first',
+          'Status changes: draft → compiling → ready (or failed)'] },
+
+  { id:'kb_preview', mod:'Knowledge Base', icon:'🧠', method:'GET', path:'/kb/{kb_id}/preview', label:'Preview KB',
+    desc:'See first N chars of compiled content', btype:'none',
+    pp:[{k:'kb_id', sk:'kb_id'}],
+    qp:[{k:'max_chars',v:'3000'}],
+    tips:['KB must be status=ready before preview works','max_chars range: 100–10000'] },
+
+  { id:'kb_get', mod:'Knowledge Base', icon:'🧠', method:'GET', path:'/kb/{kb_id}', label:'Get KB details',
+    desc:'Full KB including compiled_content', btype:'none',
+    pp:[{k:'kb_id', sk:'kb_id'}] },
+
+  { id:'kb_list', mod:'Knowledge Base', icon:'🧠', method:'GET', path:'/kb/', label:'List KBs',
+    desc:'All knowledge bases', btype:'none',
+    qp:[{k:'status',v:''}],
+    tips:['status: draft | compiling | ready | failed'] },
+
+  { id:'kb_upd', mod:'Knowledge Base', icon:'🧠', method:'PUT', path:'/kb/{kb_id}', label:'Update KB',
+    desc:'Edit name or description only', btype:'json',
+    pp:[{k:'kb_id', sk:'kb_id'}],
+    body:`{
+  "name": "Brezza March 2024 KB — Updated",
+  "description": "Recompiled with April pricing added"
+}` },
+
+  { id:'kb_del', mod:'Knowledge Base', icon:'🧠', method:'DELETE', path:'/kb/{kb_id}', label:'Deactivate KB',
+    desc:'Sets is_active=false', btype:'none',
+    pp:[{k:'kb_id', sk:'kb_id'}],
+    tips:['Soft-delete only — compiled content preserved for linked campaigns'] },
+
+  // ── CAMPAIGNS ─────────────────────────────────────────────────────────────
+  { id:'camp_create', mod:'Campaigns', icon:'📣', method:'POST', path:'/campaigns/', label:'Create campaign',
+    desc:'Set up March Brezza exchange campaign',
+    btype:'json',
+    body:`{
+  "campaign_name": "March Brezza Exchange Bonus 2024",
+  "description": "Outbound campaign targeting existing car owners for Brezza trade-in deal",
+  "promotion_type": "exchange_bonus",
+  "start_date": "2024-03-01",
+  "end_date": "2024-03-31",
+  "car_model_id": null,
+  "knowledge_base_id": null,
+  "daily_call_limit": 100,
+  "calling_hours": "09:00-18:00",
+  "language": "english",
+  "internal_notes": "Focus on ZXI+ variant. Highlight ₹50k exchange bonus. Target owners of 4+ year old cars."
+}`,
+    tips:['⚠️ Replace the two null values with your saved car_model_id and kb_id',
+          'promotion_type: festive_offer | new_launch | test_drive | exchange_bonus | emi_scheme | corporate_offer | service_camp | general_inquiry',
+          'status auto-starts as draft',
+          'campaign_name must be unique per dealership',
+          'start_date and end_date format: YYYY-MM-DD',
+          'end_date must be >= start_date'],
+    save:{'campaign_id':'campaign_id'} },
+
+  { id:'camp_autolink', mod:'Campaigns', icon:'📣', method:'POST', path:'/campaigns/{campaign_id}/documents/auto-link', label:'Auto-link docs',
+    desc:'Link all Brezza docs automatically', btype:'json',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    body:`{
+  "include_types": ["brochure", "pricing_sheet", "feature_comparison", "promotional_offer", "spec_sheet"]
+}`,
+    tips:['Campaign must have car_model_id set','Finds all completed docs for that car model',
+          'Priority order: brochure → feature_comparison → pricing_sheet → promotional_offer → spec_sheet',
+          'Or send {} to include all document types'] },
+
+  { id:'camp_linkman', mod:'Campaigns', icon:'📣', method:'POST', path:'/campaigns/{campaign_id}/documents', label:'Link docs manually',
+    desc:'Link specific document IDs', btype:'json',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    body:`{
+  "document_ids": ["<paste document_id here>"],
+  "is_primary": true
+}`,
+    tips:['is_primary=true marks first doc as the primary source','Use if auto-link finds no docs (no completed documents yet)'] },
+
+  { id:'camp_listdocs', mod:'Campaigns', icon:'📣', method:'GET', path:'/campaigns/{campaign_id}/documents', label:'List linked docs',
+    desc:'Verify which docs are linked', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'}] },
+
+  { id:'camp_unlink', mod:'Campaigns', icon:'📣', method:'DELETE', path:'/campaigns/{campaign_id}/documents/{document_id}', label:'Unlink doc',
+    desc:'Remove a document from campaign', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'},{k:'document_id', sk:'document_id'}] },
+
+  { id:'lead_add', mod:'Campaigns', icon:'📣', method:'POST', path:'/campaigns/{campaign_id}/leads', label:'Add single lead',
+    desc:'Add a walk-in customer as a lead', btype:'json',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    body:`{
+  "name": "Suresh Reddy",
+  "phone": "9100012345",
+  "alternate_phone": "9100098765",
+  "email": "suresh.reddy@gmail.com",
+  "car_interest": "Brezza ZXI+",
+  "variant_preference": "ZXI+ Automatic",
+  "fuel_preference": "Petrol",
+  "budget_min": 1200000,
+  "budget_max": 1450000,
+  "emi_preferred": true,
+  "current_car": "Hyundai i20 Sportz 2018",
+  "wants_exchange": true,
+  "source": "walk_in",
+  "source_detail": "Showroom visit — Banjara Hills",
+  "agent_notes": "Very interested in exchange bonus. Car is 6 years old. Wants test drive this weekend."
+}`,
+    tips:['phone: 10-digit Indian number starting with 6-9 (auto-normalised to +91...)',
+          'Duplicate phone in same dealership → 409 Conflict',
+          'source: walk_in | website | csv_import | referral | auto_expo | manual',
+          'budget_min/max in rupees (Decimal — no currency symbol)'],
+    save:{'lead_id':'lead_id'} },
+
+  { id:'lead_csv', mod:'Campaigns', icon:'📣', method:'POST', path:'/campaigns/{campaign_id}/leads/csv', label:'Bulk upload CSV',
+    desc:'File upload — use Swagger UI at /docs', btype:'fileupload',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    tips:['⚠️ File uploads: use Swagger UI at http://127.0.0.1:8000/docs',
+          'Required CSV columns: name, phone',
+          'Optional columns: alternate_phone, email, car_interest, variant_preference, fuel_preference, budget_min, budget_max, current_car, wants_exchange, agent_notes',
+          'Max 5,000 rows per upload, max 5MB file size',
+          'Duplicates are skipped and reported — not rejected',
+          'BOM-encoded Excel CSVs are supported (utf-8-sig)'] },
+
+  { id:'lead_list', mod:'Campaigns', icon:'📣', method:'GET', path:'/campaigns/{campaign_id}/leads', label:'List leads',
+    desc:'Filter leads by status and interest', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    qp:[{k:'call_status',v:'new'},{k:'interest_level',v:''},{k:'wants_exchange',v:''},{k:'search',v:''},{k:'limit',v:'50'},{k:'skip',v:'0'}],
+    tips:['call_status: new | called | interested | follow_up | converted | not_interested | unreachable | dnc',
+          'interest_level: hot | warm | cold',
+          'search matches name or phone'] },
+
+  { id:'lead_get', mod:'Campaigns', icon:'📣', method:'GET', path:'/campaigns/{campaign_id}/leads/{lead_id}', label:'Get lead',
+    desc:'Full lead details', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'},{k:'lead_id', sk:'lead_id'}] },
+
+  { id:'lead_upd', mod:'Campaigns', icon:'📣', method:'PATCH', path:'/campaigns/{campaign_id}/leads/{lead_id}', label:'Update lead',
+    desc:'Record call outcome after an AI/manual call', btype:'json',
+    pp:[{k:'campaign_id', sk:'campaign_id'},{k:'lead_id', sk:'lead_id'}],
+    body:`{
+  "name": "Suresh Reddy",
+  "phone": "9100012345",
+  "alternate_phone": "9100098765",
+  "email": "suresh.reddy@gmail.com",
+  "car_interest": "Brezza ZXI+",
+  "variant_preference": "ZXI+ Automatic",
+  "fuel_preference": "Petrol",
+  "budget_min": 1250000,
+  "budget_max": 1400000,
+  "emi_preferred": true,
+  "current_car": "Hyundai i20 Sportz 2018",
+  "wants_exchange": true,
+  "call_status": "interested",
+  "interest_level": "hot",
+  "call_attempts": 1,
+  "last_called_at": "2024-03-07T10:30:00",
+  "next_followup_at": "2024-03-10T10:00:00",
+  "do_not_call": false,
+  "agent_notes": "Very interested in exchange bonus. 2018 i20 Sportz. Wants test drive Saturday 10am."
+}`,
+    tips:['call_status: new | called | interested | follow_up | converted | not_interested | unreachable | dnc',
+          'interest_level: hot | warm | cold',
+          'Campaign stats (leads_interested, leads_converted) auto-recalculate on update',
+          'All fields optional — send only what changed after the call'] },
+
+  { id:'lead_del', mod:'Campaigns', icon:'📣', method:'DELETE', path:'/campaigns/{campaign_id}/leads/{lead_id}', label:'Delete lead',
+    desc:'Soft-delete a lead', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'},{k:'lead_id', sk:'lead_id'}] },
+
+  { id:'camp_update', mod:'Campaigns', icon:'📣', method:'PATCH', path:'/campaigns/{campaign_id}', label:'Update campaign',
+    desc:'Change status, config, or details', btype:'json',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    body:`{
+  "status": "active",
+  "campaign_name": "March Brezza Exchange Bonus 2024",
+  "description": "Outbound campaign targeting existing car owners for Brezza trade-in deal",
+  "promotion_type": "exchange_bonus",
+  "start_date": "2024-03-01",
+  "end_date": "2024-03-31",
+  "car_model_id": null,
+  "knowledge_base_id": null,
+  "daily_call_limit": 100,
+  "calling_hours": "09:00-18:00",
+  "language": "english",
+  "internal_notes": "Focus on ZXI+. Highlight exchange bonus."
+}`,
+    tips:['⚠️ Requires at least 1 lead to activate',
+          'Status transitions: draft→active, active→paused, paused→active, active→completed, any→cancelled',
+          'completed and cancelled are terminal — cannot be undone',
+          'All fields are optional — just send "status":"active" to activate',
+          'promotion_type: festive_offer | new_launch | test_drive | exchange_bonus | emi_scheme | corporate_offer | service_camp | general_inquiry'] },
+
+  { id:'camp_stats', mod:'Campaigns', icon:'📣', method:'GET', path:'/campaigns/{campaign_id}/stats', label:'Campaign stats',
+    desc:'Live call outcome dashboard', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    tips:['Returns: call_status_breakdown, interest_breakdown, source_breakdown, conversion_rate',
+          'Reflects real-time lead update changes'] },
+
+  { id:'camp_get', mod:'Campaigns', icon:'📣', method:'GET', path:'/campaigns/{campaign_id}', label:'Get campaign',
+    desc:'Campaign detail with linked docs', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'}] },
+
+  { id:'camp_list', mod:'Campaigns', icon:'📣', method:'GET', path:'/campaigns/', label:'List campaigns',
+    desc:'All campaigns with filters', btype:'none',
+    qp:[{k:'status',v:''},{k:'promotion_type',v:''},{k:'car_model_id',v:''},{k:'search',v:''},{k:'limit',v:'20'}] },
+
+  { id:'camp_del', mod:'Campaigns', icon:'📣', method:'DELETE', path:'/campaigns/{campaign_id}', label:'Delete campaign',
+    desc:'Soft-delete — must be paused/completed first', btype:'none',
+    pp:[{k:'campaign_id', sk:'campaign_id'}],
+    tips:['⚠️ Cannot delete an active campaign — pause or complete it first',
+          'Leads and document links preserved for audit trail'] },
+];
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let S = {
+  active: null,
+  done: new Set(JSON.parse(localStorage.getItem('swDone')||'[]')),
+  saved: JSON.parse(localStorage.getItem('swSaved')||'{}'),
+  qv: {}, pv: {}, bv: {}, fv: {}, resps: {}
+};
+
+const SAVED_KEYS = [
+  {k:'user_id',      l:'User ID'},
+  {k:'dealership_id',l:'Dealership ID'},
+  {k:'car_model_id', l:'Car ID (Brezza)'},
+  {k:'car_model_id_2',l:'Car ID (Alto)'},
+  {k:'document_id',  l:'Document ID'},
+  {k:'kb_id',        l:'KB ID'},
+  {k:'campaign_id',  l:'Campaign ID'},
+  {k:'lead_id',      l:'Lead ID'},
+];
+
+const MC = {
+  GET:    {bg:'rgba(34,211,160,0.13)', tx:'#22d3a0'},
+  POST:   {bg:'rgba(79,142,247,0.13)', tx:'#4f8ef7'},
+  PUT:    {bg:'rgba(247,168,79,0.13)', tx:'#f7a84f'},
+  PATCH:  {bg:'rgba(192,132,252,0.13)',tx:'#c084fc'},
+  DELETE: {bg:'rgba(247,79,106,0.13)', tx:'#f74f6a'},
+};
+
+// ─── SIDEBAR ─────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  let html = ''; let lastMod = null;
+  const mods = [...new Set(EP.map(e=>e.mod))];
+  const modDone = Object.fromEntries(mods.map(m=>[m, EP.filter(e=>e.mod===m).every(e=>S.done.has(e.id))]));
+  EP.forEach(ep => {
+    if (ep.mod !== lastMod) {
+      html += `<div class="module-header"><span>${ep.icon}</span>${ep.mod}<div class="module-dot ${modDone[ep.mod]?'done':''}"></div></div>`;
+      lastMod = ep.mod;
+    }
+    const mc = MC[ep.method];
+    const active = S.active===ep.id;
+    const done = S.done.has(ep.id);
+    html += `<div class="ep-item${active?' active':''}${done?' done':''}" onclick="sel('${ep.id}')">
+      <span class="ep-method" style="background:${mc.bg};color:${mc.tx}">${ep.method}</span>
+      <span class="ep-label-sb">${ep.label}</span>
+      <span class="ep-check">✓</span>
+    </div>`;
+  });
+  document.getElementById('sidebar').innerHTML = html;
+  document.getElementById('pCount').textContent = S.done.size;
+  document.getElementById('pTotal').textContent = EP.length;
+}
+
+// ─── SELECT ──────────────────────────────────────────────────────────────────
+function sel(id) { S.active = id; renderSidebar(); renderMain(); }
+
+// ─── MAIN ────────────────────────────────────────────────────────────────────
+function renderMain() {
+  const ep = EP.find(e=>e.id===S.active); if(!ep) return;
+  const mc = MC[ep.method];
+  const prev = S.resps[ep.id];
+
+  const pathHtml = ep.path.replace(/{([^}]+)}/g, (_,k)=>`<span class="path-param-hl">{${k}}</span>`);
+
+  let h = `<div class="ep-card">
+  <div class="ep-card-head">
+    <span class="method-badge" style="background:${mc.bg};color:${mc.tx};border:1px solid ${mc.tx}40">${ep.method}</span>
+    <span class="path-display">${pathHtml}</span>
+    <span class="ep-desc-txt">${ep.desc||''}</span>
+  </div>
+  <div class="ep-body">`;
+
+  // PATH PARAMS
+  if (ep.pp?.length) {
+    h += `<div><div class="sec-label">Path Parameters</div><div class="params-grid">`;
+    ep.pp.forEach(p => {
+      const sv = p.sk && S.saved[p.sk] || '';
+      const cur = S.pv[ep.id+'_'+p.k] || sv;
+      h += `<div class="param-key">{${p.k}}</div>
+        <input class="p-input" id="pp_${ep.id}_${p.k}" value="${esc(cur)}"
+          placeholder="${p.sk?'auto from saved '+p.sk:'enter UUID...'}"
+          oninput="S.pv['${ep.id}_${p.k}']=this.value">`;
+    });
+    h += `</div></div>`;
+  }
+
+  // QUERY PARAMS
+  if (ep.qp?.length) {
+    h += `<div><div class="sec-label">Query Parameters &nbsp;<span style="font-size:10px;color:var(--text3);font-style:italic">clear to skip</span></div><div class="q-wrap">`;
+    ep.qp.forEach(q => {
+      const cur = S.qv[ep.id+'_'+q.k] ?? q.v;
+      h += `<div class="q-item"><span class="q-key">${q.k}=</span>
+        <input class="q-val" value="${esc(cur)}" placeholder="${q.v||'value'}"
+          oninput="S.qv['${ep.id+'_'+q.k}']=this.value"></div>`;
+    });
+    h += `</div></div>`;
+  }
+
+  // BODY
+  if (ep.btype==='json') {
+    const bv = S.bv[ep.id] ?? ep.body ?? '{}';
+    h += `<div><div class="sec-label">Request Body &nbsp;<span style="font-size:10px;color:var(--text3);font-style:italic">application/json</span></div>
+      <div class="body-editor">
+        <div class="body-toolbar"><span class="body-type">JSON</span>
+          <button class="fmt-btn" onclick="fmt('${ep.id}')">⌥ Format</button>
+        </div>
+        <textarea class="body-ta" id="bta_${ep.id}" oninput="S.bv['${ep.id}']=this.value">${esc(bv)}</textarea>
+      </div></div>`;
+  } else if (ep.btype==='form') {
+    h += `<div><div class="sec-label">Form Fields &nbsp;<span style="font-size:10px;color:var(--text3);font-style:italic">application/x-www-form-urlencoded</span></div>
+      <div class="form-table">`;
+    ep.fields.forEach(f => {
+      const sv = f.sk && S.saved[f.sk] || '';
+      const cur = S.fv[ep.id+'_'+f.k] || sv;
+      h += `<div class="form-row">
+        <div class="form-key">${f.k}</div>
+        <input class="form-val" id="fv_${ep.id}_${f.k}" value="${esc(cur)}" placeholder="${esc(f.ph||'')}"
+          oninput="S.fv['${ep.id}_${f.k}']=this.value">
+      </div>`;
+    });
+    h += `</div></div>`;
+  } else if (ep.btype==='fileupload') {
+    h += `<div style="background:rgba(247,168,79,0.08);border:1px solid rgba(247,168,79,0.25);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:12px;color:var(--orange);font-weight:700;margin-bottom:8px">⚠️ File Upload Endpoint</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.6;">This endpoint requires a file picker. Open Swagger UI to test it:</div>
+      <button class="exec-btn secondary" style="margin-top:10px" onclick="openDocs()">↗ Open Swagger UI at /docs</button>
+    </div>`;
+  }
+
+  // TIPS
+  if (ep.tips?.length) {
+    h += `<div class="tips"><ul>`;
+    ep.tips.forEach(t => h += `<li class="${t.startsWith('⚠️')?'w':''}">${t}</li>`);
+    h += `</ul></div>`;
+  }
+
+  // EXECUTE ROW
+  const isFile = ep.btype==='fileupload';
+  h += `<div class="exec-row">`;
+  if (!isFile) {
+    h += `<button class="exec-btn primary" id="eb_${ep.id}" onclick="run('${ep.id}')">
+        <div class="spinner" id="sp_${ep.id}"></div>
+        <span id="el_${ep.id}">▶ Execute</span>
+      </button>`;
+  }
+  h += `<button class="exec-btn secondary" onclick="clrResp('${ep.id}')">✕ Clear</button>
+    <button class="mark-btn${S.done.has(ep.id)?' is-done':''}" id="mb_${ep.id}" onclick="toggleDone('${ep.id}')">${S.done.has(ep.id)?'✓ Done':'Mark done ✓'}</button>
+  </div>`;
+
+  // RESPONSE
+  h += `<div class="resp-panel">
+    <div class="resp-toolbar">
+      <span class="status-badge ${prev?(prev.ok?'ok':'err'):'idle'}" id="sb_${ep.id}">${prev?prev.status:'Awaiting request'}</span>
+      <span class="resp-time" id="rt_${ep.id}">${prev?prev.time:''}</span>
+      <button class="copy-btn" onclick="cpResp('${ep.id}')">Copy</button>
+    </div>
+    <pre class="resp-body ${prev?(prev.ok?'ok':'err'):''}" id="rb_${ep.id}">${prev?hl(prev.body):'<span style="color:var(--text3)">No response yet — click Execute</span>'}</pre>
+  </div>`;
+
+  h += `</div></div>`;
+  document.getElementById('main').innerHTML = h;
+}
+
+// ─── EXECUTE ─────────────────────────────────────────────────────────────────
+async function run(id) {
+  const ep = EP.find(e=>e.id===id); if(!ep) return;
+  const base = document.getElementById('baseUrl').value.replace(/\/$/,'');
+  const token = document.getElementById('tokenInput').value.trim();
+
+  let url = ep.path;
+  (ep.pp||[]).forEach(p => {
+    const el = document.getElementById(`pp_${ep.id}_${p.k}`);
+    const v = el?.value || S.pv[ep.id+'_'+p.k] || '';
+    url = url.replace(`{${p.k}}`, encodeURIComponent(v));
+  });
+
+  const qps = (ep.qp||[]).reduce((a,q) => {
+    const v = S.qv[ep.id+'_'+q.k] ?? q.v;
+    if (v!==undefined && v!=='') a.push(`${q.k}=${encodeURIComponent(v)}`);
+    return a;
+  }, []);
+  if (qps.length) url += '?' + qps.join('&');
+
+  const headers = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  let body;
+  if (ep.btype==='json') {
+    const ta = document.getElementById(`bta_${ep.id}`);
+    headers['Content-Type'] = 'application/json';
+    body = ta?.value || '{}';
+  } else if (ep.btype==='form') {
+    const fd = new URLSearchParams();
+    (ep.fields||[]).forEach(f => {
+      const el = document.getElementById(`fv_${ep.id}_${f.k}`);
+      if (el?.value) fd.append(f.k, el.value);
+    });
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    body = fd.toString();
+  }
+
+  // UI loading
+  const eb = document.getElementById(`eb_${ep.id}`);
+  const sp = document.getElementById(`sp_${ep.id}`);
+  const el2 = document.getElementById(`el_${ep.id}`);
+  const sb = document.getElementById(`sb_${ep.id}`);
+  const rb = document.getElementById(`rb_${ep.id}`);
+  const rt = document.getElementById(`rt_${ep.id}`);
+  if (eb) eb.disabled = true;
+  if (sp) sp.classList.add('on');
+  if (el2) el2.textContent = 'Sending...';
+  if (sb) { sb.textContent = '...'; sb.className = 'status-badge idle'; }
+
+  const t0 = Date.now();
+  try {
+    const res = await fetch(base+url, {method:ep.method, headers, body});
+    const ms = Date.now()-t0;
+    let txt; try { txt = await res.text(); } catch { txt='(no body)'; }
+    let parsed; try { parsed = JSON.parse(txt); } catch { parsed=null; }
+    const disp = parsed ? JSON.stringify(parsed,null,2) : txt;
+    const ok = res.ok;
+
+    sb.textContent = `${res.status} ${res.statusText}`;
+    sb.className = `status-badge ${ok?'ok':'err'}`;
+    if (rt) rt.textContent = `${ms}ms`;
+    rb.innerHTML = hl(disp);
+    rb.className = `resp-body ${ok?'ok':'err'}`;
+    S.resps[id] = {status:`${res.status} ${res.statusText}`, body:disp, ok, time:`${ms}ms`};
+
+    // auto-save response fields
+    if (ok && parsed && ep.save) {
+      Object.entries(ep.save).forEach(([field,sk]) => {
+        const v = parsed[field];
+        if (v) { S.saved[sk] = v; localStorage.setItem('swSaved', JSON.stringify(S.saved)); }
+      });
+      renderSaved();
+    }
+
+    // auto-fill token from login
+    if (ok && parsed && ep.autoToken && parsed.access_token) {
+      document.getElementById('tokenInput').value = parsed.access_token;
+      document.getElementById('tokenDot').classList.add('active');
+      S.saved.access_token = parsed.access_token;
+      localStorage.setItem('swSaved', JSON.stringify(S.saved));
+    }
+
+    if (ok) {
+      S.done.add(id); localStorage.setItem('swDone', JSON.stringify([...S.done]));
+      renderSidebar();
+      const mb = document.getElementById(`mb_${id}`);
+      if (mb) { mb.textContent = '✓ Done'; mb.classList.add('is-done'); }
+    }
+  } catch(err) {
+    const ms = Date.now()-t0;
+    sb.textContent = 'Network Error'; sb.className = 'status-badge err';
+    if (rt) rt.textContent = `${ms}ms`;
+    rb.textContent = `❌ Could not reach ${base+url}\n\n${err.message}\n\nEnsure:\n1. uvicorn is running: uvicorn main:app --reload\n2. CORS middleware is in main.py (allow_origins=["*"])`;
+    rb.className = 'resp-body err';
+  } finally {
+    if (eb) eb.disabled = false;
+    if (sp) sp.classList.remove('on');
+    if (el2) el2.textContent = '▶ Execute';
+  }
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function hl(json) {
+  if (!json) return '';
+  try {
+    return json.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
+        if (/^"/.test(m)) return /:$/.test(m) ? `<span class="json-k">${m}</span>` : `<span class="json-s">${m}</span>`;
+        if (/true|false/.test(m)) return `<span class="json-b">${m}</span>`;
+        if (/null/.test(m)) return `<span class="json-null">${m}</span>`;
+        return `<span class="json-n">${m}</span>`;
+      });
+  } catch { return json; }
+}
+function fmt(id) {
+  const ta = document.getElementById(`bta_${id}`); if(!ta) return;
+  try { ta.value = JSON.stringify(JSON.parse(ta.value),null,2); S.bv[id]=ta.value; } catch {}
+}
+function clrResp(id) {
+  delete S.resps[id];
+  const rb = document.getElementById(`rb_${id}`);
+  const sb = document.getElementById(`sb_${id}`);
+  if (rb) { rb.innerHTML='<span style="color:var(--text3)">No response yet — click Execute</span>'; rb.className='resp-body'; }
+  if (sb) { sb.textContent='Awaiting request'; sb.className='status-badge idle'; }
+  const rt = document.getElementById(`rt_${id}`); if(rt) rt.textContent='';
+}
+function cpResp(id) { const rb = document.getElementById(`rb_${id}`); if(rb) navigator.clipboard.writeText(rb.innerText); }
+function toggleDone(id) {
+  S.done.has(id) ? S.done.delete(id) : S.done.add(id);
+  localStorage.setItem('swDone', JSON.stringify([...S.done]));
+  renderSidebar();
+  const mb = document.getElementById(`mb_${id}`);
+  if (mb) { mb.textContent = S.done.has(id)?'✓ Done':'Mark done ✓'; mb.classList.toggle('is-done', S.done.has(id)); }
+}
+function onToken() {
+  const v = document.getElementById('tokenInput').value.trim();
+  document.getElementById('tokenDot').classList.toggle('active', v.length>0);
+  if (v) { S.saved.access_token = v; localStorage.setItem('swSaved', JSON.stringify(S.saved)); }
+}
+function renderSaved() {
+  let h = '';
+  SAVED_KEYS.forEach(({k,l}) => {
+    const v = S.saved[k];
+    const short = v ? (v.length>22 ? v.slice(0,10)+'…'+v.slice(-5) : v) : '';
+    h += `<div class="saved-card">
+      <div class="saved-lbl">${l}</div>
+      <div class="saved-val ${v?'':'empty'}" onclick="cpVal('${k}')" title="${v||''}">${v?short:'not saved yet'}</div>
+    </div>`;
+  });
+  document.getElementById('savedItems').innerHTML = h;
+}
+function cpVal(k) {
+  const v = S.saved[k]; if(!v) return;
+  navigator.clipboard.writeText(v);
+}
+function clearAll() {
+  S = {...S, done:new Set(), saved:{}, qv:{}, pv:{}, bv:{}, fv:{}, resps:{}};
+  localStorage.removeItem('swDone'); localStorage.removeItem('swSaved');
+  document.getElementById('tokenInput').value = '';
+  document.getElementById('tokenDot').classList.remove('active');
+  renderSidebar(); renderSaved();
+}
+function openDocs() { window.open(document.getElementById('baseUrl').value.replace(/\/$/,'')+'/docs','_blank'); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ─── BOOT ────────────────────────────────────────────────────────────────────
+renderSidebar();
+renderSaved();
+if (S.saved.access_token) {
+  document.getElementById('tokenInput').value = S.saved.access_token;
+  document.getElementById('tokenDot').classList.add('active');
+}
+</script>
+</body>
+</html>

@@ -340,6 +340,8 @@ class LeadUpdate(BaseModel):
     wants_exchange: Optional[bool] = None
     call_status: Optional[str] = None
     interest_level: Optional[str] = None
+    call_attempts: Optional[int] = None          # incremented after each call attempt
+    last_called_at: Optional[datetime] = None    # timestamp of most recent call
     next_followup_at: Optional[datetime] = None
     do_not_call: Optional[bool] = None
     agent_notes: Optional[str] = None
@@ -349,6 +351,13 @@ class LeadUpdate(BaseModel):
     def validate_phone(cls, v: Optional[str]) -> Optional[str]:
         if v:
             return validate_phone_field(v)
+        return v
+
+    @field_validator("call_attempts")
+    @classmethod
+    def non_negative_attempts(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v < 0:
+            raise ValueError("call_attempts cannot be negative")
         return v
 
     @field_validator("call_status")

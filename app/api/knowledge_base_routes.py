@@ -53,6 +53,7 @@ def create_knowledge_base(
         name=body.name.strip(),
         description=body.description,
         status="draft",
+        total_chunks=0,
         is_active=True,
         created_at=now,
         updated_at=now,
@@ -170,7 +171,7 @@ def preview_kb_content(
             detail=f"KB not ready (status: {kb.status}). Run POST /kb/{kb_id}/compile first."
         )
 
-    content = kb.compiled_content or ""
+    content = str(kb.compiled_content) if kb.compiled_content is not None else ""
     preview = content[:max_chars]
     truncated = len(content) > max_chars
 

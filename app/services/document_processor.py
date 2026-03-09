@@ -48,8 +48,25 @@ from app.models.document_chunk_model import DocumentChunk
 
 logger = logging.getLogger(__name__)
 
+# Load .env before reading os.getenv() — background tasks import this module
+# before database.py runs load_dotenv(), so we must call it ourselves.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except ImportError:
+    pass
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# ── Extraction mode ────────────────────────────────────────────────────────────
+# PYMUPDF_ONLY = True  → skip OpenAI Vision entirely, use PyMuPDF text for all pages
+#   Use when: no billing / free quota exhausted / local testing (processes in seconds)
+# PYMUPDF_ONLY = False → OpenAI Vision primary, PyMuPDF fallback (production quality)
+#
+# Reads from .env: PYMUPDF_ONLY=true  (default: True — safe, instant, free)
+# Switch to False only after adding a paid OpenAI key with active billing.
+PYMUPDF_ONLY: bool = os.getenv("PYMUPDF_ONLY", "true").lower() in ("1", "true", "yes")
 
 # Model options:
 #   "gpt-4o-mini"  → cheapest, fast, good for most brochures    ~$0.00015/image
@@ -62,13 +79,9 @@ CHUNK_SIZE      = 800
 MIN_CHUNK_CHARS = 50
 
 # ── PyMuPDF-first threshold ────────────────────────────────────────────────────
-# Pages with >= this many extracted characters skip the OpenAI Vision call.
-# Pages below this are assumed scanned/image-only → OpenAI Vision.
-# Set to 10 so even sparse cover pages with a few words skip the API call.
 MIN_TEXT_THRESHOLD = 10
 
 # ── Rate limiting ──────────────────────────────────────────────────────────────
-# OpenAI tier-1: 500 RPM for gpt-4o-mini. 0.5s gap is very conservative.
 OPENAI_MIN_INTERVAL_SECONDS = 0.5
 _last_openai_call_time: float = 0.0
 
@@ -76,6 +89,11 @@ _last_openai_call_time: float = 0.0
 # MD5(image_bytes) → extracted text. Prevents duplicate API calls when the
 # same document is reprocessed within the same server process.
 _page_cache: Dict[str, str] = {}
+
+# ── Quota guard ────────────────────────────────────────────────────────────────
+# Set to True the first time we get an insufficient_quota (429) error.
+# All subsequent pages skip OpenAI entirely and use PyMuPDF — no more retry waits.
+_openai_quota_exhausted: bool = False
 
 # ── Document type detection keywords ──────────────────────────────────────────
 DOC_TYPE_SIGNALS = {
@@ -509,6 +527,17 @@ def _extract_from_image_bytes(
                 )
                 return ""
 
+            # Quota exhausted — no point retrying ANY page, switch to PyMuPDF mode
+            is_quota = "insufficient_quota" in err_str or "exceeded your current quota" in err_str
+            if is_quota:
+                global _openai_quota_exhausted
+                _openai_quota_exhausted = True
+                logger.error(
+                    f"OpenAI quota exhausted — switching ALL remaining pages to PyMuPDF fallback. "
+                    f"Add billing at https://platform.openai.com/account/billing"
+                )
+                return ""
+
             # Rate limit — read retry-after from error, wait exactly that long
             is_rate_limit = "429" in err_str or "rate_limit" in err_str.lower()
             if is_rate_limit and attempt < max_retries:
@@ -602,63 +631,83 @@ def extract_text_from_pdf(file_path: str, doc_type: str = "brochure") -> str:
         Concatenated text from all pages with [Page N] markers.
     """
     try:
-        import fitz  # PyMuPDF — used for rendering pages to images
+        import fitz  # PyMuPDF
     except ImportError:
         raise RuntimeError(
             "PyMuPDF not installed. Run: pip install pymupdf --break-system-packages"
         )
 
-    client  = _get_openai_client()
-    prompt  = PROMPTS.get(doc_type, PROMPTS["general"])
-
     pdf_doc       = fitz.open(file_path)
     total_pages   = len(pdf_doc)  # type: ignore[arg-type]
     process_pages = min(total_pages, MAX_PAGES)
     page_texts: List[str] = []
+    stats = {"openai": 0, "pymupdf": 0, "visual_only": 0}
 
-    stats = {"openai": 0, "pymupdf_fallback": 0, "visual_only": 0}
+    # ── Mode: PyMuPDF-only (no OpenAI calls) ──────────────────────────────────
+    if PYMUPDF_ONLY:
+        logger.info(
+            f"PDF (PyMuPDF-only mode): '{file_path}' | "
+            f"{process_pages}/{total_pages} pages | type={doc_type}"
+        )
+        for page_num in range(process_pages):
+            page  = pdf_doc[page_num]
+            label = f"page {page_num + 1}/{process_pages}"
+            text  = page.get_text("text").strip()  # type: ignore[attr-defined]
+            if text and len(text) >= MIN_TEXT_THRESHOLD:
+                page_texts.append(f"[Page {page_num + 1}]\n{text}")
+                stats["pymupdf"] += 1
+            else:
+                page_texts.append(f"[Page {page_num + 1}] [VISUAL — no text]")
+                stats["visual_only"] += 1
+                logger.info(f"○ Visual-only: {label}")
+        pdf_doc.close()
+        logger.info(
+            f"✓ PyMuPDF-only complete | "
+            f"text={stats['pymupdf']} pages | visual={stats['visual_only']} pages"
+        )
+        if total_pages > MAX_PAGES:
+            page_texts.append(
+                f"[Note: Document has {total_pages} pages. Only first {MAX_PAGES} processed.]"
+            )
+        return "\n\n".join(page_texts)
+
+    # ── Mode: OpenAI Vision primary, PyMuPDF fallback ─────────────────────────
+    client = _get_openai_client()
+    prompt = PROMPTS.get(doc_type, PROMPTS["general"])
 
     logger.info(
-        f"PDF: '{file_path}' | {process_pages}/{total_pages} pages | "
-        f"type={doc_type} | strategy=openai-vision-primary"
+        f"PDF (OpenAI Vision primary): '{file_path}' | "
+        f"{process_pages}/{total_pages} pages | type={doc_type}"
     )
 
     for page_num in range(process_pages):
         page  = pdf_doc[page_num]
         label = f"page {page_num + 1}/{process_pages}"
 
-        # ── Step 1: Render page → PNG (used by OpenAI Vision) ─────────────────
         mat       = fitz.Matrix(PAGE_DPI / 72, PAGE_DPI / 72)  # type: ignore[attr-defined]
         pix       = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)  # type: ignore[attr-defined]
         img_bytes = pix.tobytes("png")
 
-        # ── Step 2: OpenAI Vision — primary extraction ────────────────────────
-        openai_text = _extract_from_image_bytes(
-            img_bytes, "image/png", client, prompt, label
-        )
+        # Skip OpenAI if quota was already exhausted on a previous page
+        if _openai_quota_exhausted:
+            openai_text = ""
+        else:
+            openai_text = _extract_from_image_bytes(
+                img_bytes, "image/png", client, prompt, label
+            )
 
         if openai_text and len(openai_text.strip()) > 30:
-            # ── Path A: OpenAI succeeded ──────────────────────────────────────
             page_texts.append(f"[Page {page_num + 1}]\n{openai_text}")
             logger.info(f"✅ OpenAI Vision: {label} ({len(openai_text)} chars)")
             stats["openai"] += 1
-
         else:
-            # ── Path B: OpenAI failed → PyMuPDF fallback ──────────────────────
-            logger.warning(
-                f"OpenAI low/no output for {label} — trying PyMuPDF fallback"
-            )
+            logger.warning(f"OpenAI low/no output for {label} — trying PyMuPDF fallback")
             pymupdf_text = page.get_text("text").strip()  # type: ignore[attr-defined]
-
             if pymupdf_text and len(pymupdf_text) >= MIN_TEXT_THRESHOLD:
-                page_texts.append(
-                    f"[Page {page_num + 1}] [pymupdf-fallback]\n{pymupdf_text}"
-                )
+                page_texts.append(f"[Page {page_num + 1}] [pymupdf-fallback]\n{pymupdf_text}")
                 logger.warning(f"↩ PyMuPDF fallback: {label} ({len(pymupdf_text)} chars)")
-                stats["pymupdf_fallback"] += 1
-
+                stats["pymupdf"] += 1
             else:
-                # Truly visual page — cover photo, decorative page etc.
                 page_texts.append(f"[Page {page_num + 1}] [VISUAL — no text]")
                 logger.info(f"○ Visual-only: {label}")
                 stats["visual_only"] += 1
@@ -674,7 +723,7 @@ def extract_text_from_pdf(file_path: str, doc_type: str = "brochure") -> str:
     logger.info(
         f"✓ Extraction complete | "
         f"OpenAI Vision: {stats['openai']} pages | "
-        f"PyMuPDF fallback: {stats['pymupdf_fallback']} pages | "
+        f"PyMuPDF fallback: {stats['pymupdf']} pages | "
         f"Visual-only: {stats['visual_only']} pages"
     )
 
@@ -699,7 +748,8 @@ def extract_text_from_docx(file_path: str, doc_type: str = "brochure") -> str:
             "Run: pip install python-docx --break-system-packages"
         )
 
-    client = _get_openai_client()
+    # In PyMuPDF-only mode skip OpenAI image extraction from embedded images
+    client = None if PYMUPDF_ONLY else _get_openai_client()
     prompt = PROMPTS.get(doc_type, PROMPTS["general"])
     doc    = DocxDocument(file_path)
     parts: List[str] = []
@@ -733,22 +783,25 @@ def extract_text_from_docx(file_path: str, doc_type: str = "brochure") -> str:
         if rows:
             parts.append("\n[TABLE]\n" + "\n".join(rows) + "\n[/TABLE]")
 
-    # Embedded images → OpenAI Vision
-    image_count = 0
-    for rel in doc.part.rels.values():
-        if "image" in rel.reltype:
-            try:
-                image_data = rel.target_part.blob
-                mime       = "image/png" if image_data[:4] == b'\x89PNG' else "image/jpeg"
-                image_count += 1
-                label       = f"embedded image {image_count}"
-                img_text    = _extract_from_image_bytes(
-                    image_data, mime, client, prompt, label
-                )
-                if img_text and "[VISUAL PAGE" not in img_text and len(img_text) > 20:
-                    parts.append(f"\n[From {label}]\n{img_text}")
-            except Exception as e:
-                logger.warning(f"Could not extract DOCX image: {e}")
+    # Embedded images → OpenAI Vision (skipped in PyMuPDF-only mode)
+    if not PYMUPDF_ONLY and client is not None:
+        image_count = 0
+        for rel in doc.part.rels.values():
+            if "image" in rel.reltype:
+                try:
+                    image_data = rel.target_part.blob
+                    mime       = "image/png" if image_data[:4] == b'\x89PNG' else "image/jpeg"
+                    image_count += 1
+                    label       = f"embedded image {image_count}"
+                    img_text    = _extract_from_image_bytes(
+                        image_data, mime, client, prompt, label
+                    )
+                    if img_text and "[VISUAL PAGE" not in img_text and len(img_text) > 20:
+                        parts.append(f"\n[From {label}]\n{img_text}")
+                except Exception as e:
+                    logger.warning(f"Could not extract DOCX image: {e}")
+    else:
+        logger.info("DOCX: skipping embedded image extraction (PyMuPDF-only mode)")
 
     return "\n\n".join(parts)
 
@@ -758,7 +811,17 @@ def extract_text_from_docx(file_path: str, doc_type: str = "brochure") -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def extract_text_from_image(file_path: str, doc_type: str = "brochure") -> str:
-    """Send an uploaded image file directly to OpenAI Vision."""
+    """Send an uploaded image file directly to OpenAI Vision.
+    In PyMuPDF-only mode, returns a warning string — bare images need a Vision API."""
+    if PYMUPDF_ONLY:
+        logger.warning(
+            "Image uploaded in PyMuPDF-only mode — no Vision API available. "
+            "Add OPENAI_API_KEY and set PYMUPDF_ONLY=false in .env to enable image extraction."
+        )
+        return (
+            "[Image document uploaded without Vision API. "
+            "Set OPENAI_API_KEY and PYMUPDF_ONLY=false in .env to extract text from images.]"
+        )
     client = _get_openai_client()
     prompt = PROMPTS.get(doc_type, PROMPTS["general"])
 

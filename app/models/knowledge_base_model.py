@@ -21,6 +21,9 @@ class KnowledgeBase(Base):
     - When a customer calls in, the AI agent queries this KB using vector search
       to find relevant info (e.g. "What is the price of Swift ZXI+?")
     - Multiple campaigns can share the same KB, or each can have its own
+
+    DB columns match the migration in alembic/versions/migration_day3.py.
+    Do NOT add columns here without a corresponding Alembic migration.
     """
 
     __tablename__ = "knowledge_bases"
@@ -35,36 +38,37 @@ class KnowledgeBase(Base):
         index=True
     )
 
-    created_by = Column(
-        UUID(as_uuid=True),
-        ForeignKey("users.user_id"),
-        nullable=False
-    )
-
     # ── Identity ──────────────────────────────────────────────────────────────
-    name = Column(String(255), nullable=False)           # e.g. "March 2026 Suzuki KB"
+    name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
 
-    # ── Build state ───────────────────────────────────────────────────────────
-    # draft -> building -> ready | failed
-    # draft   = created, documents not yet compiled
-    # building = compilation in progress
-    # ready   = all documents processed, embeddings stored, ready for campaigns
-    # failed  = compilation failed (check build_error)
-    status = Column(String(30), nullable=False, default="draft")
-    build_error = Column(Text, nullable=True)
-    built_at = Column(TIMESTAMP, nullable=True)          # when status became 'ready'
+    # ── Compiled content ──────────────────────────────────────────────────────
+    # The full structured text fed to the AI agent after compilation
+    compiled_content = Column(Text, nullable=True)
+
+    # JSON arrays stored as text: list of document_ids / car_model_ids used
+    source_document_ids = Column(Text, nullable=True)
+    car_model_ids = Column(Text, nullable=True)
 
     # ── Stats ─────────────────────────────────────────────────────────────────
-    total_documents = Column(Integer, nullable=False, default=0)
-    total_chunks = Column(Integer, nullable=False, default=0)
+    total_chunks = Column(Integer, nullable=True, server_default="0")
+    word_count = Column(Integer, nullable=True)
+
+    # ── Build state ───────────────────────────────────────────────────────────
+    # draft → compiling → ready | failed
+    status = Column(String(30), nullable=False, server_default="draft")
+    compile_error = Column(Text, nullable=True)   # populated when status=failed
+
+    # ── ElevenLabs integration (Day 5) ────────────────────────────────────────
+    elevenlabs_kb_id = Column(String(255), nullable=True)
+    last_synced_at = Column(TIMESTAMP, nullable=True)
 
     # ── Soft delete ───────────────────────────────────────────────────────────
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
 
     # ── Timestamps ────────────────────────────────────────────────────────────
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    created_at = Column(TIMESTAMP, nullable=False, server_default=func.now())
+    updated_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 class KnowledgeBaseDocument(Base):

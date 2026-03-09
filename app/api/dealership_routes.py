@@ -1,234 +1,287 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
-from typing import List
-from app.models.dealership import Dealership
-from app.models.user import User
-from app.schemas.dealership_schema import DealershipCreate, DealershipUpdate, DealershipResponse
-from app.core.database import get_db
-from app.core.security import get_current_user
+import os
+import uuid
+import logging
+import traceback
 from datetime import datetime
-import shutil, os, uuid
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Query
+from sqlalchemy.orm import Session
 
-router = APIRouter(prefix="/dealership", tags=["Dealership"])
+from app.models.document_model import Document
+from app.models.document_chunk_model import DocumentChunk
+from app.models.user import User
+from app.schemas.document_schema import (
+    DocumentResponse, DocumentDetailResponse, ChunkResponse, ProcessingResult
+)
+from app.core.database import get_db, SessionLocal
+from app.core.security import get_current_user
+from app.services.document_processor import process_document
 
-UPLOAD_DIR = "uploads/logos"
+logger = logging.getLogger(__name__)
+
+
+# ── Background task wrapper ────────────────────────────────────────────────────
+# IMPORTANT: FastAPI closes the request DB session before background tasks run.
+# We must create a fresh session inside the background task itself.
+def _run_process_document(document_id: str) -> None:
+    """
+    Wrapper that creates its own DB session for background processing.
+    Never pass the request-scoped `db` session to BackgroundTasks — it will
+    already be closed by the time the task runs.
+    """
+    logger.info(f"Background task started — document_id={document_id}")
+    db = SessionLocal()
+    try:
+        result = process_document(document_id, db)
+        status = result.get("processing_status", "unknown")
+        if status == "completed":
+            logger.info(
+                f"✅ Document processed — id={document_id} | "
+                f"chunks={result.get('chunk_count')} | "
+                f"type={result.get('doc_type_detected')} | "
+                f"method={result.get('extraction_method')}"
+            )
+        else:
+            logger.error(
+                f"❌ Document processing FAILED — id={document_id} | "
+                f"reason: {result.get('message')}"
+            )
+    except Exception as e:
+        logger.error(
+            f"💥 Unhandled exception in background task for document_id={document_id}:\n"
+            + traceback.format_exc()
+        )
+        # Best-effort: mark document as failed in DB
+        try:
+            doc = db.query(Document).filter(Document.document_id == document_id).first()
+            if doc:
+                doc.processing_status = "failed"        # type: ignore[assignment]
+                doc.processing_error  = str(e)          # type: ignore[assignment]
+                doc.updated_at        = datetime.utcnow() # type: ignore[assignment]
+                db.commit()
+        except Exception:
+            logger.error("Also failed to update document status to 'failed' in DB")
+    finally:
+        db.close()
+        logger.info(f"Background task finished — document_id={document_id}")
+
+
+router = APIRouter(prefix="/documents", tags=["Documents"])
+
+UPLOAD_DIR = "uploads/documents"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_TYPES = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/msword": "docx",
+    "image/jpeg": "image",
+    "image/png": "image",
+    "image/webp": "image",
+}
+MAX_FILE_SIZE_MB = 20
 
 
-@router.post("/create", response_model=DealershipResponse, status_code=201)
-def create_dealership(
-    body: DealershipCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    from sqlalchemy import text
-
-    # Block if GST is already taken by a DIFFERENT user's active dealership
-    if body.gst_number:
-        gst_conflict = db.query(Dealership).filter(
-            Dealership.gst_number == body.gst_number,
-            Dealership.user_id != current_user.user_id,
-            Dealership.status == "active"
-        ).first()
-        if gst_conflict:
-            raise HTTPException(
-                status_code=409,
-                detail="GST number is already registered to another dealership"
-            )
-
-        # Clear GST from any closed dealership owned by THIS user so unique constraint doesn't block
-        db.execute(
-            text("UPDATE dealerships SET gst_number = NULL WHERE user_id = :uid AND gst_number = :gst AND status = 'closed'"),
-            {"uid": str(current_user.user_id), "gst": body.gst_number}
-        )
-        db.commit()
-
-    # Block if registration number is already taken by a DIFFERENT user's active dealership
-    if body.registration_number:
-        reg_conflict = db.query(Dealership).filter(
-            Dealership.registration_number == body.registration_number,
-            Dealership.user_id != current_user.user_id,
-            Dealership.status == "active"
-        ).first()
-        if reg_conflict:
-            raise HTTPException(
-                status_code=409,
-                detail="Registration number is already registered to another dealership"
-            )
-
-        # Clear reg number from any closed dealership owned by THIS user
-        db.execute(
-            text("UPDATE dealerships SET registration_number = NULL WHERE user_id = :uid AND registration_number = :reg AND status = 'closed'"),
-            {"uid": str(current_user.user_id), "reg": body.registration_number}
-        )
-        db.commit()
-
-    dealership = Dealership(
-        dealership_id=uuid.uuid4(),
-        user_id=current_user.user_id,
-        # core identity
-        name=body.name,
-        brand=body.brand,
-        registration_number=body.registration_number,
-        gst_number=body.gst_number,
-        # location
-        location=body.location,
-        showroom_address=body.showroom_address,
-        city=body.city,
-        state=body.state,
-        country=body.country or "India",
-        pincode=body.pincode,
-        latitude=body.latitude,
-        longitude=body.longitude,
-        # contact
-        contact_phone=body.contact_phone,
-        alternate_phone=body.alternate_phone,
-        contact_email=body.contact_email,
-        website_url=body.website_url,
-        # business details
-        description=body.description,
-        established_year=body.established_year,
-        total_employees=body.total_employees,
-        monthly_target_calls=body.monthly_target_calls,
-        # status
-        status="active",
-        is_verified=False,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
-    )
-    db.add(dealership)
-
-    # Link this dealership to the user
-    current_user.dealership_id = dealership.dealership_id  # type: ignore
-    current_user.updated_at = datetime.utcnow()  # type: ignore
-
-    db.commit()
-    db.refresh(dealership)
-    return dealership
-
-
-@router.post("/close", response_model=DealershipResponse)
-def close_dealership(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.dealership_id is None:
-        raise HTTPException(status_code=400, detail="You have no active dealership to close")
-
-    dealership = db.query(Dealership).filter(
-        Dealership.dealership_id == current_user.dealership_id,
-        Dealership.status == "active"
-    ).first()
-
-    if not dealership:
-        raise HTTPException(status_code=404, detail="Active dealership not found")
-
-    dealership.status = "closed"  # type: ignore
-    dealership.closed_at = datetime.utcnow()  # type: ignore
-    dealership.updated_at = datetime.utcnow()  # type: ignore
-
-    # Unlink from user so they can create a new one
-    current_user.dealership_id = None  # type: ignore
-    current_user.updated_at = datetime.utcnow()  # type: ignore
-
-    db.commit()
-    db.refresh(dealership)
-    return dealership
-
-
-@router.get("/me", response_model=DealershipResponse)
-def get_my_dealership(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.dealership_id is None:
+def _require_dealership(current_user: User):
+    if not current_user.dealership_id:  # type: ignore[truthy-function]
         raise HTTPException(
-            status_code=404,
-            detail="You have no active dealership. Create one at POST /dealership/create"
+            status_code=400,
+            detail="You must create a dealership first (POST /dealership/create)"
         )
-    dealership = db.query(Dealership).filter(
-        Dealership.dealership_id == current_user.dealership_id
+
+
+def _get_doc_or_404(document_id: str, dealership_id, db: Session) -> Document:
+    doc = db.query(Document).filter(
+        Document.document_id == document_id,
+        Document.dealership_id == dealership_id,
+        Document.deleted_at.is_(None)
     ).first()
-    if not dealership:
-        raise HTTPException(status_code=404, detail="Dealership not found")
-    return dealership
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
 
 
-@router.get("/history", response_model=List[DealershipResponse])
-def get_dealership_history(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    dealerships = db.query(Dealership).filter(
-        Dealership.user_id == current_user.user_id
-    ).order_by(Dealership.created_at.desc()).all()
-    return dealerships
-
-
-@router.put("/me", response_model=DealershipResponse)
-def update_my_dealership(
-    body: DealershipUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.dealership_id is None:
-        raise HTTPException(status_code=400, detail="You have no active dealership")
-
-    dealership = db.query(Dealership).filter(
-        Dealership.dealership_id == current_user.dealership_id,
-        Dealership.status == "active"
-    ).first()
-    if not dealership:
-        raise HTTPException(status_code=404, detail="Active dealership not found")
-
-    update_data = body.model_dump(exclude_unset=True)
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields provided to update")
-
-    for field, value in update_data.items():
-        setattr(dealership, field, value)
-
-    dealership.updated_at = datetime.utcnow()  # type: ignore
-    db.commit()
-    db.refresh(dealership)
-    return dealership
-
-
-@router.post("/me/logo", response_model=DealershipResponse)
-def upload_logo(
+@router.post("/upload", response_model=DocumentResponse, status_code=201)
+async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    document_type: str = Form(default="brochure"),
+    title: Optional[str] = Form(default=None),
+    description: Optional[str] = Form(default=None),
+    car_model_id: Optional[str] = Form(default=None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.dealership_id is None:
-        raise HTTPException(status_code=400, detail="You have no active dealership")
+    """
+    Upload a car brochure, pricing sheet, or promotional document.
+    Accepted: PDF, DOCX, JPG, PNG, WEBP (max 20MB).
+    Text extraction runs automatically in the background.
+    """
+    _require_dealership(current_user)
 
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
+    content_type = file.content_type or ""
+    file_type = ALLOWED_TYPES.get(content_type)
+    if not file_type:
         raise HTTPException(
             status_code=415,
-            detail=f"Unsupported file type '{file.content_type}'. Allowed: jpeg, png, webp"
+            detail=f"Unsupported file type '{content_type}'. Allowed: PDF, DOCX, JPG, PNG, WEBP"
         )
 
-    dealership = db.query(Dealership).filter(
-        Dealership.dealership_id == current_user.dealership_id
-    ).first()
-    if not dealership:
-        raise HTTPException(status_code=404, detail="Dealership not found")
+    valid_doc_types = {
+        "brochure", "pricing_sheet", "feature_comparison",
+        "promotional_offer", "spec_sheet", "other"
+    }
+    if document_type not in valid_doc_types:
+        raise HTTPException(
+            status_code=422,
+            detail=f"document_type must be one of: {', '.join(sorted(valid_doc_types))}"
+        )
 
-    ext = (file.filename or "file").split(".")[-1].lower()
-    filename = f"{uuid.uuid4()}.{ext}"
-    filepath = os.path.join(UPLOAD_DIR, filename)
+    file_bytes = await file.read()
+    file_size = len(file_bytes)
+    if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB")
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    with open(filepath, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    original_name = file.filename or "document"
+    ext = os.path.splitext(original_name)[1].lower() or f".{file_type}"
+    stored_name = f"{uuid.uuid4()}{ext}"
+    file_path = os.path.join(UPLOAD_DIR, stored_name)
 
-    if dealership.logo is not None and os.path.exists(str(dealership.logo)):
-        os.remove(str(dealership.logo))
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
 
-    dealership.logo = filepath  # type: ignore
-    dealership.updated_at = datetime.utcnow()  # type: ignore
+    now = datetime.utcnow()
+    doc = Document(
+        document_id=uuid.uuid4(),
+        dealership_id=current_user.dealership_id,
+        car_model_id=car_model_id if car_model_id else None,
+        uploaded_by=current_user.user_id,
+        filename=original_name,
+        stored_filename=stored_name,
+        file_path=file_path,
+        file_type=file_type,
+        mime_type=content_type,
+        file_size_bytes=file_size,
+        document_type=document_type,
+        processing_status="pending",
+        chunk_count=0,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(doc)
     db.commit()
-    db.refresh(dealership)
-    return dealership
+    db.refresh(doc)
+
+    background_tasks.add_task(_run_process_document, str(doc.document_id))
+    return doc
+
+
+@router.get("/", response_model=List[DocumentResponse])
+def list_documents(
+    document_type: Optional[str] = Query(None),
+    processing_status: Optional[str] = Query(None),
+    car_model_id: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all uploaded documents for your dealership."""
+    _require_dealership(current_user)
+
+    query = db.query(Document).filter(
+        Document.dealership_id == current_user.dealership_id,
+        Document.deleted_at.is_(None)
+    )
+    if document_type:
+        query = query.filter(Document.document_type == document_type)
+    if processing_status:
+        query = query.filter(Document.processing_status == processing_status)
+    if car_model_id:
+        query = query.filter(Document.car_model_id == car_model_id)
+
+    return query.order_by(Document.created_at.desc()).offset(skip).limit(limit).all()
+
+
+@router.get("/{document_id}", response_model=DocumentDetailResponse)
+def get_document(
+    document_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get full document details including extracted text."""
+    _require_dealership(current_user)
+    return _get_doc_or_404(document_id, current_user.dealership_id, db)
+
+
+@router.get("/{document_id}/chunks", response_model=List[ChunkResponse])
+def get_document_chunks(
+    document_id: str,
+    section_type: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all extracted chunks for a document, optionally filtered by section_type."""
+    _require_dealership(current_user)
+    doc = _get_doc_or_404(document_id, current_user.dealership_id, db)
+
+    if doc.processing_status != "completed":  # type: ignore[comparison-overlap]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document not yet processed (status: {doc.processing_status})"
+        )
+
+    query = db.query(DocumentChunk).filter(
+        DocumentChunk.document_id == document_id
+    )
+    if section_type:
+        query = query.filter(DocumentChunk.section_type == section_type)
+
+    return query.order_by(DocumentChunk.chunk_index).all()
+
+
+@router.post("/{document_id}/reprocess", response_model=ProcessingResult)
+def reprocess_document(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Re-trigger text extraction. Useful when initial processing failed."""
+    _require_dealership(current_user)
+    doc = _get_doc_or_404(document_id, current_user.dealership_id, db)
+
+    doc.processing_status = "pending"       # type: ignore[assignment]
+    doc.processing_error = None             # type: ignore[assignment]
+    doc.updated_at = datetime.utcnow()      # type: ignore[assignment]
+    db.commit()
+
+    background_tasks.add_task(_run_process_document, str(doc.document_id))
+
+    return ProcessingResult(
+        document_id=doc.document_id,  # type: ignore[arg-type]
+        processing_status="pending",
+        chunk_count=doc.chunk_count or 0,  # type: ignore[arg-type]
+        message="Reprocessing started. Check status via GET /documents/{id}"
+    )
+
+
+@router.delete("/{document_id}")
+def delete_document(
+    document_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Soft-delete a document. File and chunks are preserved."""
+    _require_dealership(current_user)
+    doc = _get_doc_or_404(document_id, current_user.dealership_id, db)
+
+    doc.deleted_at = datetime.utcnow()      # type: ignore[assignment]
+    doc.is_active = False                   # type: ignore[assignment]
+    doc.updated_at = datetime.utcnow()      # type: ignore[assignment]
+    db.commit()
+
+    return {"message": f"Document '{doc.filename}' has been deleted"}
