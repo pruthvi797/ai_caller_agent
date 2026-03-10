@@ -178,7 +178,7 @@ def create_elevenlabs_agent(
                 "language": language,
             },
             "tts": {
-                "model_id": "eleven_turbo_v2_5",     # Low latency for real-time calls
+                "model_id": "eleven_flash_v2",     # Low latency for real-time calls
                 "voice_id": voice_id,
                 "stability": stability,
                 "similarity_boost": similarity_boost,
@@ -307,34 +307,17 @@ def delete_elevenlabs_agent(elevenlabs_agent_id: str) -> bool:
 # TASK 5.2 — KNOWLEDGE BASE SYNC
 # ══════════════════════════════════════════════════════════════════════════════
 
-def create_kb_document(
-    name: str,
-    text_content: str,
-) -> Dict[str, Any]:
-    """
-    Upload compiled KB text to ElevenLabs as a knowledge base document.
+def create_kb_document(name: str, text_content: str) -> Dict[str, Any]:
 
-    POST /v1/convai/knowledge-base/document
-
-    ElevenLabs stores the document and makes it searchable via RAG.
-    When a customer asks "What is the price of Brezza ZXi+?", ElevenLabs
-    automatically searches this document and injects relevant snippets
-    into the agent's context.
-
-    Returns: { "id": "kb_doc_xxxxx", "name": "...", ... }
-    The returned "id" is what we store as elevenlabs_kb_id in agent_config.
-    """
-    # ElevenLabs accepts multipart form upload for KB documents
-    # We send text as a .txt file
     files = {
         "file": (f"{name}.txt", text_content.encode("utf-8"), "text/plain"),
     }
-    # No Content-Type header — httpx sets it automatically for multipart
+
     headers = {"xi-api-key": ELEVENLABS_API_KEY}
 
     with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
         response = client.post(
-            f"{ELEVENLABS_API_BASE}/convai/knowledge-base/document",
+            f"{ELEVENLABS_API_BASE}/convai/knowledge-base",
             headers=headers,
             files=files,
             data={"name": name},
